@@ -6,6 +6,7 @@ Changelog:
 - add option to send email only if security updates are available
 - fix password promt during update check
 - fix uninstall issue
+- add hostname in mail notification subject #254
 - hide mail error
 
 **v4.5.2** (24.08.2025)
