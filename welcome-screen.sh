@@ -126,11 +126,12 @@ MINUTES=$(( (NOW - MOD) / 60 ))
 }
 
 # Welcome
-if [[ -f /usr/bin/neofetch ]]; then
+if [[ -f /usr/bin/screenfetch ]]; then
+  echo
+  screenfetch
+elif [[ -f /usr/bin/neofetch ]]; then
   echo
   neofetch
-elif [[ -f /usr/bin/screenfetch ]]; then
-  echo && screenfetch && echo
 else
   echo
 fi

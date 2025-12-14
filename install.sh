@@ -398,12 +398,17 @@ WELCOME_SCREEN_INSTALL () {
   if ! grep -q "check-updates.sh" /etc/crontab; then
     echo "00 07,19 * * *  root    update -check >/dev/null 2>&1" >> /etc/crontab
   fi
-  if ! [[ -f /usr/bin/screenfetch ]]; then
-    echo -e "${OR:-}  with or without screenfetch?${CL:-}"
-    read -p "  Type [Y/y] or Enter for install with screenfetch - anything else will skip: " -r
-    if [[ $REPLY =~ ^[Yy]$ || $REPLY = "" ]]; then 
+  # Fetch tool install (neofetch or screenfetch)
+  if ! command -v neofetch >/dev/null 2>&1 && ! command -v screenfetch >/dev/null 2>&1; then
+    echo -e "${OR:-}  Install neofetch or screenfetch?${CL:-}"
+    read -r -p "  Type [N/n] or Enter for neofetch, [S/s] for screenfetch: " REPLY
+    if [[ $REPLY =~ ^[Ss]$ ]]; then
       apt-get install screenfetch -y || true
       echo -e "\n✅${GN:-} Welcome-Screen installed with screenfetch${CL:-}"
+      return 0
+    else
+      apt-get install neofetch -y || true
+      echo -e "\n✅${GN:-} Welcome-Screen installed with neofetch${CL:-}"
       return 0
     fi
   else

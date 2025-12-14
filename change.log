@@ -6,6 +6,7 @@ Changelog:
 - add option to send email only if security updates are available
 - fix password promt during update check
 - fix uninstall issue
+- add screenfetch also during install #253
 - add hostname in mail notification subject #254
 - hide mail error
 
