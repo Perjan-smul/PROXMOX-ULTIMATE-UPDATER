@@ -132,7 +132,6 @@ if [[ $DOCKER_COMPOSE_V1 == true || $DOCKER_COMPOSE_V2 == true ]] && [[ $DOCKER_
 fi
 
 # Community / Helper Scripts
-apt-get install expect -y
 if grep -q "community-scripts" /usr/bin/update 2>/dev/null && [[ $INCLUDE_HELPER_SCRIPTS == true ]]; then
   echo -e "\n*** Updating Community-Scripts ***"
   PHS_SILENT=1 update > /dev/null 2>&1
