@@ -135,14 +135,6 @@ fi
 apt-get install expect -y
 if grep -q "community-scripts" /usr/bin/update 2>/dev/null && [[ $INCLUDE_HELPER_SCRIPTS == true ]]; then
   echo -e "\n*** Updating Community-Scripts ***"
-  expect <<EOF > /dev/null 2>&1
-    set timeout 3
-    spawn update
-    expect "Choose an option:"
-    send "2\r"
-    expect "<Ok>"
-    send "\r"
-    expect eof
-EOF
+  PHS_SILENT=1 update > /dev/null 2>&1
   echo -e "✅ Update process completed\n"
 fi
