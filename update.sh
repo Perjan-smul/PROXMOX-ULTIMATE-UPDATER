@@ -1141,7 +1141,7 @@ UPDATE_VM_QEMU () {
     elif [[ "$KERNEL" =~ FreeBSD ]]; then
       echo -e "${OR:-} Free BSD skipped by user${CL:-}\n"
       return
-    elif [[ ${OS,,} =~ ubuntu|debian|devuan ]]; then
+    elif [[ ${OS,,} =~ ubuntu|mint|debian|devuan ]]; then
       # Check Internet connection
       if ! (qm guest exec "$VM" -- bash -c "$CHECK_URL_EXE -q -c1 $CHECK_URL &>/dev/null"); then
         echo -e "${OR:-} ❌ Internet is not reachable - skip the update${CL:-}\n"
