@@ -317,7 +317,7 @@ CHECK_VM () {
 #          ssh -t -q -p "$SSH_VM_PORT" -tt "$USER"@"$IP" pkg update
 #          return
 #        fi
-        if [[ "$OS" =~ Ubuntu ]] || [[ "$OS" =~ Debian ]] || [[ "$OS" =~ Devuan ]]; then
+        if [[ ${OS,,} =~ ubuntu|mint|kali|debian|devuan ]]; then
           ssh -q -p "$SSH_VM_PORT" "$USER"@"$IP" "apt-get update" >/dev/null 2>&1
           APT_OUTPUT=$(ssh -q -p "$SSH_VM_PORT" "$USER"@"$IP" "apt-get -s upgrade")
           SECURITY_APT_UPDATES=$(echo "$APT_OUTPUT" | grep -ci '^inst.*security')
@@ -375,7 +375,7 @@ CHECK_VM_QEMU () {
 #      qm guest exec "$VM" -- tcsh -c "pkg update"
 #      return
 #    fi
-    if [[ "$OS" =~ Ubuntu ]] || [[ "$OS" =~ Debian ]] || [[ "$OS" =~ Devuan ]]; then
+    if [[ ${OS,,} =~ ubuntu|mint|kali|debian|devuan ]]; then
       qm guest exec "$VM" -- bash -c "apt-get update" >/dev/null 2>&1
       SECURITY_APT_UPDATES=$(qm guest exec "$VM" -- bash -c "apt-get -s upgrade | grep -ci ^inst.*security | tr -d '\n'" | tail -n +4 | head -n -1 | cut -c 18- | rev | cut -c 2- | rev)
       if [[ "$SECURITY_APT_UPDATES" -gt 0 ]]; then SECURITY_UPDATES_AVALABLE=true; fi
