@@ -14,6 +14,7 @@ IOBROKER=$(awk -F'"' '/^IOBROKER=/ {print $2}' $CONFIG_FILE)
 PTERODACTYL=$(awk -F'"' '/^PTERODACTYL=/ {print $2}' $CONFIG_FILE)
 OCTOPRINT=$(awk -F'"' '/^OCTOPRINT=/ {print $2}' $CONFIG_FILE)
 DOCKER_COMPOSE=$(awk -F'"' '/^DOCKER_COMPOSE=/ {print $2}' $CONFIG_FILE)
+UNIFI=$(awk -F'"' '/^UNIFI=/ {print $2}' $CONFIG_FILE)
 
 # PiHole
 if [[ -f "/usr/local/bin/pihole" && $PIHOLE == true ]]; then
@@ -77,6 +78,16 @@ if [[ -d "/root/OctoPrint" && $OCTOPRINT == true ]]; then
   OPRINT=$(find /home -name "oprint")
   "$OPRINT"/bin/pip install -U --ignore-installed octoprint
   sudo service octoprint restart
+fi
+
+# Unifi Network Controller
+if [[ -d "/usr/lib/unifi" && $UNIFI == true ]]; then
+  echo -e "\n*** Updating Unifi Network Controller ***\n"
+  # --allow-releaseinfo-change needed because Unifi regularly changes repository metadata between versions
+  DEBIAN_FRONTEND=noninteractive apt-get update --allow-releaseinfo-change
+  DEBIAN_FRONTEND=noninteractive apt-get upgrade -y \
+    -o Dpkg::Options::="--force-confdef" \
+    -o Dpkg::Options::="--force-confold"
 fi
 
 # Docker Compose detection
