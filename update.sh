@@ -876,16 +876,23 @@ UPDATE_CONTAINER () {
   # shellcheck disable=SC2015
   if [[ "${OS,,}" =~ ubuntu|debian|devuan ]]; then
     echo -e "${OR:-}--- APT UPDATE ---${CL:-}"
-    pct exec "$CONTAINER" -- bash -c "apt-get update -y" || ERROR_CODE=$? && ID=$CONTAINER && ERROR_MSG=$(pct exec "$CONTAINER" -- bash -c "apt-get update -y" 2>&1) || ERROR
+    # --allow-releaseinfo-change needed for repos that change metadata between versions (e.g. Unifi)
+    pct exec "$CONTAINER" -- bash -c "apt-get update --allow-releaseinfo-change" || ERROR_CODE=$? && ID=$CONTAINER && ERROR_MSG=$(pct exec "$CONTAINER" -- bash -c "apt-get update --allow-releaseinfo-change" 2>&1) || ERROR
     if [[ $ERROR_CODE != "" ]]; then return; fi
     # Check APT in Container
     if pct exec "$CONTAINER" -- bash -c "grep -rnw /etc/apt -e unifi >/dev/null 2>&1"; then
       UNIFI="true"
     fi
     # Check END
-    if [[ "$HEADLESS" == true || "$UNIFI" == true ]]; then
+    if [[ "$HEADLESS" == true ]]; then
       echo -e "\n${OR:-}--- APT UPGRADE HEADLESS ---${CL:-}"
       pct exec "$CONTAINER" -- bash -c "DEBIAN_FRONTEND=noninteractive apt-get dist-upgrade -y" || ERROR_CODE=$? && ID=$CONTAINER && ERROR_MSG=$(pct exec "$CONTAINER" -- bash -c "DEBIAN_FRONTEND=noninteractive apt-get dist-upgrade -y" 2>&1) || ERROR
+      UNIFI=""
+      if [[ $ERROR_CODE != "" ]]; then return; fi
+    elif [[ "$UNIFI" == true ]]; then
+      echo -e "\n${OR:-}--- APT UPGRADE HEADLESS (Unifi) ---${CL:-}"
+      # Use --force-confdef/--force-confold to suppress Unifi interactive prompts
+      pct exec "$CONTAINER" -- bash -c "DEBIAN_FRONTEND=noninteractive apt-get dist-upgrade -y -o Dpkg::Options::='--force-confdef' -o Dpkg::Options::='--force-confold'" || ERROR_CODE=$? && ID=$CONTAINER && ERROR_MSG=$(pct exec "$CONTAINER" -- bash -c "DEBIAN_FRONTEND=noninteractive apt-get dist-upgrade -y -o Dpkg::Options::='--force-confdef' -o Dpkg::Options::='--force-confold'" 2>&1) || ERROR
       UNIFI=""
       if [[ $ERROR_CODE != "" ]]; then return; fi
     else
