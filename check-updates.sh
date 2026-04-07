@@ -6,7 +6,7 @@
 
 # shellcheck disable=SC2034
 
-VERSION="1.7.9"
+VERSION="1.8"
 
 #Variable / Function
 LOCAL_FILES="/etc/ultimate-updater"
@@ -81,6 +81,7 @@ READ_WRITE_CONFIG () {
   SSH_PORT=$(awk -F'"' '/^SSH_PORT=/ {print $2}' $CONFIG_FILE)
   EMAIL_USER=$(awk -F'"' '/^EMAIL_USER=/ {print $2}' $CONFIG_FILE)
   EMAIL_NO_UPDATES=$(awk -F'"' '/^EMAIL_NO_UPDATES=/ {print $2}' $CONFIG_FILE)
+  EMAIL_ONLY_SECURITY=$(awk -F'"' '/^EMAIL_ONLY_SECURITY=/ {print $2}' $CONFIG_FILE)
   WITH_HOST=$(awk -F'"' '/^CHECK_WITH_HOST=/ {print $2}' $CONFIG_FILE)
   WITH_LXC=$(awk -F'"' '/^CHECK_WITH_LXC=/ {print $2}' $CONFIG_FILE)
   WITH_VM=$(awk -F'"' '/^CHECK_WITH_VM=/ {print $2}' $CONFIG_FILE)
@@ -89,6 +90,7 @@ READ_WRITE_CONFIG () {
   RUNNING_VM=$(awk -F'"' '/^CHECK_RUNNING_VM=/ {print $2}' $CONFIG_FILE)
   STOPPED_VM=$(awk -F'"' '/^CHECK_STOPPED_VM=/ {print $2}' $CONFIG_FILE)
   PAUSED_VM=$(awk -F'"' '/^CHECK_PAUSED_VM=/ {print $2}' $CONFIG_FILE)
+  REEBOOT_IF_NEEDED=$(awk -F'"' '/^REEBOOT_IF_NEEDED=/ {print $2}' "$CONFIG_FILE")
   EXCLUDED=$(awk -F'"' '/^EXCLUDE_UPDATE_CHECK=/ {print $2}' $CONFIG_FILE)
   ONLY=$(awk -F'"' '/^ONLY_UPDATE_CHECK=/ {print $2}' $CONFIG_FILE)
   CHECK_URL=$(awk -F '"' '/^URL_FOR_INTERNET_CHECK=/ {print $2}' $CONFIG_FILE)
@@ -136,10 +138,11 @@ CHECK_HOST () {
 CHECK_HOST_ITSELF () {
   apt-get update >/dev/null 2>&1
   SECURITY_APT_UPDATES=$(apt-get -s upgrade | grep -ci "^inst.*security" | tr -d '\n')
+  if [[ $SECURITY_APT_UPDATES != 0 ]]; then SECURITY_UPDATES_AVALABLE=true; fi
   NORMAL_APT_UPDATES=$(apt-get -s upgrade | grep -ci "^inst." | tr -d '\n')
   if [[ -f /var/run/reboot-required.pkgs ]]; then REBOOT_REQUIRED=true; fi
   if [[ $SECURITY_APT_UPDATES != 0 || $NORMAL_APT_UPDATES != 0 || $REBOOT_REQUIRED == true ]]; then
-    echo -e "${GN}Host${CL} : ${GN}$HOSTNAME${CL}"
+    echo -e "${BL}Host${CL} : ${GN}$HOSTNAME${CL}"
   fi
   if [[ $REBOOT_REQUIRED == true ]]; then echo -e "${OR} Reboot required${CL}"; fi
   if [[ $SECURITY_APT_UPDATES != 0 && $NORMAL_APT_UPDATES != 0 ]]; then
@@ -196,6 +199,7 @@ CHECK_CONTAINER () {
     pct exec "$CONTAINER" -- bash -c "apt-get update" >/dev/null 2>&1
     APT_OUTPUT=$(pct exec "$CONTAINER" -- bash -c "apt-get -s upgrade")
     SECURITY_APT_UPDATES=$(echo "$APT_OUTPUT" | grep -ci '^inst.*security' || true)
+    if [[ "$SECURITY_APT_UPDATES" -gt 0 ]]; then SECURITY_UPDATES_AVALABLE=true; fi
     NORMAL_APT_UPDATES=$(echo "$APT_OUTPUT" | grep -ci '^inst.' || true)
     if [[ "$SECURITY_APT_UPDATES" -gt 0 || "$NORMAL_APT_UPDATES" != 0 ]]; then
       echo -e "${GN}LXC ${BL}$CONTAINER${CL} : ${GN}$NAME${CL}"
@@ -284,7 +288,9 @@ VM_CHECK_START () {
           # Suspend VM
           qm suspend "$VM"
         elif [[ "$STATUS" == "status: running" && "$RUNNING_VM" == true ]]; then
+          VM_NOT_STOPPED=true
           CHECK_VM "$VM"
+          VM_NOT_STOPPED=""
         fi
       fi
     fi
@@ -311,10 +317,11 @@ CHECK_VM () {
 #          ssh -t -q -p "$SSH_VM_PORT" -tt "$USER"@"$IP" pkg update
 #          return
 #        fi
-        if [[ "$OS" =~ Ubuntu ]] || [[ "$OS" =~ Debian ]] || [[ "$OS" =~ Devuan ]]; then
+        if [[ ${OS,,} =~ ubuntu|mint|kali|debian|devuan ]]; then
           ssh -q -p "$SSH_VM_PORT" "$USER"@"$IP" "apt-get update" >/dev/null 2>&1
           APT_OUTPUT=$(ssh -q -p "$SSH_VM_PORT" "$USER"@"$IP" "apt-get -s upgrade")
           SECURITY_APT_UPDATES=$(echo "$APT_OUTPUT" | grep -ci '^inst.*security')
+          if [[ "$SECURITY_APT_UPDATES" -gt 0 ]]; then SECURITY_UPDATES_AVALABLE=true; fi
           NORMAL_APT_UPDATES=$(echo "$APT_OUTPUT" | grep -ci '^inst.')
           if ssh -q -p "$SSH_VM_PORT" "$USER"@"$IP" stat /var/run/reboot-required.pkgs \> /dev/null 2\>\&1; then REBOOT_REQUIRED=true; fi
           if [[ "$SECURITY_APT_UPDATES" -gt 0 || "$NORMAL_APT_UPDATES" -gt 0 || "$REBOOT_REQUIRED" == true ]]; then
@@ -327,6 +334,9 @@ CHECK_VM () {
             echo -e "S: $SECURITY_APT_UPDATES / "
           elif [[ "$NORMAL_APT_UPDATES" -gt 0 ]]; then
             echo -e "N: $NORMAL_APT_UPDATES"
+          fi
+          if [[ "$REBOOT_REQUIRED" == true ]] && [[ "$REEBOOT_IF_NEEDED" == true ]] && [[ "$VM_NOT_STOPPED" == true ]]; then
+            ssh -q -p "$SSH_VM_PORT" "$USER"@"$IP" "reboot" >/dev/null 2>&1
           fi
         elif [[ "$OS" =~ Fedora ]]; then
           ssh -q -p "$SSH_VM_PORT" "$USER"@"$IP" "dnf -y update" >/dev/null 2>&1
@@ -365,9 +375,10 @@ CHECK_VM_QEMU () {
 #      qm guest exec "$VM" -- tcsh -c "pkg update"
 #      return
 #    fi
-    if [[ "$OS" =~ Ubuntu ]] || [[ "$OS" =~ Debian ]] || [[ "$OS" =~ Devuan ]]; then
+    if [[ ${OS,,} =~ ubuntu|mint|kali|debian|devuan ]]; then
       qm guest exec "$VM" -- bash -c "apt-get update" >/dev/null 2>&1
       SECURITY_APT_UPDATES=$(qm guest exec "$VM" -- bash -c "apt-get -s upgrade | grep -ci ^inst.*security | tr -d '\n'" | tail -n +4 | head -n -1 | cut -c 18- | rev | cut -c 2- | rev)
+      if [[ "$SECURITY_APT_UPDATES" -gt 0 ]]; then SECURITY_UPDATES_AVALABLE=true; fi
       NORMAL_APT_UPDATES=$(qm guest exec "$VM" -- bash -c "apt-get -s upgrade | grep -ci ^inst. | tr -d '\n'" | tail -n +4 | head -n -1 | cut -c 18- | rev | cut -c 2- | rev)
       if [[ $(qm guest exec "$VM" -- bash -c "[ -f /var/run/reboot-required.pkgs ]" | grep exitcode) =~ 0 ]]; then REBOOT_REQUIRED=true; fi
       if [[ "$SECURITY_APT_UPDATES" -gt 0 || "$NORMAL_APT_UPDATES" -gt 0 || "$REBOOT_REQUIRED" == true ]]; then
@@ -428,9 +439,14 @@ EXIT () {
       cat "$LOCAL_FILES/mail-output" | sed -r "s/\x1B\[([0-9]{1,3}(;[0-9]{1,3})*)?[mGK]//g" | tee "$LOCAL_FILES/mail-output" >/dev/null 2>&1
       chmod 640 "$LOCAL_FILES/mail-output"
       if [[ $(stat -c%s "$LOCAL_FILES/mail-output") -gt 46 ]]; then
-        mail -s "Ultimate Updater summary" "$EMAIL_USER" < "$LOCAL_FILES"/mail-output
+        # check variable !!!
+        if [[ "$EMAIL_ONLY_SECURITY" == true && "$SECURITY_UPDATES_AVALABLE" == true ]]; then
+          mail -s "Ultimate Updater summary - $HOSTNAME" "$EMAIL_USER" < "$LOCAL_FILES"/mail-output
+        else
+          mail -s "Ultimate Updater summary - $HOSTNAME" "$EMAIL_USER" < "$LOCAL_FILES"/mail-output
+        fi
       elif [[ "$EMAIL_NO_UPDATES" == true ]]; then
-        echo "No updates found during search" | mail -s "Ultimate Updater" root
+        echo "No updates found during search" | mail -s "Ultimate Updater" "$EMAIL_USER"
       fi
     fi
   fi
