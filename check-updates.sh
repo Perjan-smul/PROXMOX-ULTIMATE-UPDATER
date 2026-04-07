@@ -5,11 +5,16 @@
 #################
 
 # shellcheck disable=SC2034
-VERSION="1.4.8"
+
+VERSION="1.8"
 
 #Variable / Function
 LOCAL_FILES="/etc/ultimate-updater"
 CONFIG_FILE="$LOCAL_FILES/update.conf"
+
+# Tag filter
+# shellcheck disable=SC1091
+. "$LOCAL_FILES/tag-filter.sh"
 
 # Colors
 BL="\e[36m"
@@ -19,15 +24,11 @@ GN="\e[1;92m"
 CL="\e[0m"
 
 ARGUMENTS () {
-  while test $# -gt -0; do
-    ARGUMENT="$1"
+  while [[ $# -gt 0 ]]; do
+    local ARGUMENT="$1"
     case "$ARGUMENT" in
-      -c)
-        RICM=true
-        ;;
-      -u)
-        RDU=true
-        ;;
+      -c) RICM=true ;;
+      -u) RDU=true ;;
       chost)
         COMMAND=true
         OUTPUT_TO_FILE
@@ -77,13 +78,45 @@ USAGE () {
 
 
 READ_WRITE_CONFIG () {
+  SSH_PORT=$(awk -F'"' '/^SSH_PORT=/ {print $2}' $CONFIG_FILE)
+  EMAIL_USER=$(awk -F'"' '/^EMAIL_USER=/ {print $2}' $CONFIG_FILE)
+  EMAIL_NO_UPDATES=$(awk -F'"' '/^EMAIL_NO_UPDATES=/ {print $2}' $CONFIG_FILE)
+  EMAIL_ONLY_SECURITY=$(awk -F'"' '/^EMAIL_ONLY_SECURITY=/ {print $2}' $CONFIG_FILE)
   WITH_HOST=$(awk -F'"' '/^CHECK_WITH_HOST=/ {print $2}' $CONFIG_FILE)
   WITH_LXC=$(awk -F'"' '/^CHECK_WITH_LXC=/ {print $2}' $CONFIG_FILE)
   WITH_VM=$(awk -F'"' '/^CHECK_WITH_VM=/ {print $2}' $CONFIG_FILE)
   RUNNING=$(awk -F'"' '/^CHECK_RUNNING_CONTAINER=/ {print $2}' $CONFIG_FILE)
   STOPPED=$(awk -F'"' '/^CHECK_STOPPED_CONTAINER=/ {print $2}' $CONFIG_FILE)
+  RUNNING_VM=$(awk -F'"' '/^CHECK_RUNNING_VM=/ {print $2}' $CONFIG_FILE)
+  STOPPED_VM=$(awk -F'"' '/^CHECK_STOPPED_VM=/ {print $2}' $CONFIG_FILE)
+  PAUSED_VM=$(awk -F'"' '/^CHECK_PAUSED_VM=/ {print $2}' $CONFIG_FILE)
+  REEBOOT_IF_NEEDED=$(awk -F'"' '/^REEBOOT_IF_NEEDED=/ {print $2}' "$CONFIG_FILE")
   EXCLUDED=$(awk -F'"' '/^EXCLUDE_UPDATE_CHECK=/ {print $2}' $CONFIG_FILE)
   ONLY=$(awk -F'"' '/^ONLY_UPDATE_CHECK=/ {print $2}' $CONFIG_FILE)
+  CHECK_URL=$(awk -F '"' '/^URL_FOR_INTERNET_CHECK=/ {print $2}' $CONFIG_FILE)
+
+  if declare -f apply_only_exclude_tags >/dev/null 2>&1; then
+    apply_only_exclude_tags ONLY EXCLUDED
+  fi
+}
+
+# Wait for bootup / reboot
+# Container
+WAIT_FOR_BOOTUP_LXC () {
+  MAX_RETRIES=10
+  COUNT=1
+  sleep "$LXC_START_DELAY"
+  while [ $COUNT -le $MAX_RETRIES ]; do
+    if pct exec "$CONTAINER" -- bash -c "exit" >/dev/null 2>&1; then
+      break
+    else
+      sleep "$LXC_START_DELAY"
+    fi
+    COUNT=$((COUNT+1))
+  done
+  if [ $COUNT -gt $MAX_RETRIES ]; then
+    return 0
+  fi
 }
 
 ## HOST ##
@@ -97,19 +130,19 @@ HOST_CHECK_START () {
 # Host Check
 CHECK_HOST () {
   HOST=$1
-  ssh "$HOST" mkdir -p $LOCAL_FILES
+  ssh "$HOST" -p "$SSH_PORT" mkdir -p $LOCAL_FILES
   scp $LOCAL_FILES/update.conf "$HOST":$LOCAL_FILES/update.conf >/dev/null 2>&1
-  ssh "$HOST" 'bash -s' < "$0" -- "-c host"
-
+  ssh "$HOST" -p "$SSH_PORT" 'bash -s' < "$0" -- "-c host"
 }
 
 CHECK_HOST_ITSELF () {
   apt-get update >/dev/null 2>&1
   SECURITY_APT_UPDATES=$(apt-get -s upgrade | grep -ci "^inst.*security" | tr -d '\n')
+  if [[ $SECURITY_APT_UPDATES != 0 ]]; then SECURITY_UPDATES_AVALABLE=true; fi
   NORMAL_APT_UPDATES=$(apt-get -s upgrade | grep -ci "^inst." | tr -d '\n')
   if [[ -f /var/run/reboot-required.pkgs ]]; then REBOOT_REQUIRED=true; fi
   if [[ $SECURITY_APT_UPDATES != 0 || $NORMAL_APT_UPDATES != 0 || $REBOOT_REQUIRED == true ]]; then
-    echo -e "${GN}Host${CL} : ${GN}$HOSTNAME${CL}"
+    echo -e "${BL}Host${CL} : ${GN}$HOSTNAME${CL}"
   fi
   if [[ $REBOOT_REQUIRED == true ]]; then echo -e "${OR} Reboot required${CL}"; fi
   if [[ $SECURITY_APT_UPDATES != 0 && $NORMAL_APT_UPDATES != 0 ]]; then
@@ -133,12 +166,14 @@ CONTAINER_CHECK_START () {
       continue
     elif [[ "$ONLY" != "" ]] && ! [[ "$ONLY" =~ $CONTAINER ]]; then
       continue
+    elif (pct config "$CONTAINER" | grep template >/dev/null 2>&1); then
+      continue
     else
       STATUS=$(pct status "$CONTAINER")
       if [[ "$STATUS" == "status: stopped" && "$STOPPED" == true ]]; then
         # Start the container
         pct start "$CONTAINER"
-        sleep 5
+        WAIT_FOR_BOOTUP_LXC
         CHECK_CONTAINER "$CONTAINER"
         # Stop the container
         pct shutdown "$CONTAINER"
@@ -162,9 +197,10 @@ CHECK_CONTAINER () {
   NAME=$(pct exec "$CONTAINER" hostname)
   if [[ "$OS" =~ ubuntu ]] || [[ "$OS" =~ debian ]] || [[ "$OS" =~ devuan ]]; then
     pct exec "$CONTAINER" -- bash -c "apt-get update" >/dev/null 2>&1
-    SECURITY_APT_UPDATES=$(pct exec "$CONTAINER" -- bash -c "apt-get -s upgrade | grep -ci ^inst.*security | tr -d '\n'")
-    NORMAL_APT_UPDATES=$(pct exec "$CONTAINER" -- bash -c "apt-get -s upgrade | grep -ci ^inst. | tr -d '\n'")
-#    NOT_INSTALLED=$(apt-get -s upgrade | grep -ci "^inst.*not")
+    APT_OUTPUT=$(pct exec "$CONTAINER" -- bash -c "apt-get -s upgrade")
+    SECURITY_APT_UPDATES=$(echo "$APT_OUTPUT" | grep -ci '^inst.*security' || true)
+    if [[ "$SECURITY_APT_UPDATES" -gt 0 ]]; then SECURITY_UPDATES_AVALABLE=true; fi
+    NORMAL_APT_UPDATES=$(echo "$APT_OUTPUT" | grep -ci '^inst.' || true)
     if [[ "$SECURITY_APT_UPDATES" -gt 0 || "$NORMAL_APT_UPDATES" != 0 ]]; then
       echo -e "${GN}LXC ${BL}$CONTAINER${CL} : ${GN}$NAME${CL}"
     fi
@@ -177,7 +213,7 @@ CHECK_CONTAINER () {
     fi
   elif [[ "$OS" =~ fedora ]]; then
     pct exec "$CONTAINER" -- bash -c "dnf update" >/dev/null 2>&1
-    UPDATES=$(pct exec "$CONTAINER" -- bash -c "dnf check-update| grep -Ec ' updates$'")
+    UPDATES=$(pct exec "$CONTAINER" -- bash -c "dnf check-update | grep -Ec ' updates$'")
     if [[ "$UPDATES" -gt 0 ]]; then
       echo -e "${GN}LXC ${BL}$CONTAINER${CL} : ${GN}$NAME${CL}"
       echo -e "$UPDATES"
@@ -206,29 +242,56 @@ CHECK_CONTAINER () {
 VM_CHECK_START () {
   # Get the list of VMs
   VMS=$(qm list | tail -n +2 | cut -c -10)
-  # Loop through the VMs
+  # Loop through VMs
   for VM in $VMS; do
-    PRE_OS=$(qm config "$VM" | grep 'ostype:' | sed 's/ostype:\s*//')
-    if [[ "$ONLY" == "" && "$EXCLUDED" =~ $VM ]]; then
-      continue
-    elif [[ "$ONLY" != "" ]] && ! [[ "$ONLY" =~ $VM ]]; then
-      continue
-    elif [[ "$PRE_OS" =~ w ]]; then
-      continue
-    else
-      STATUS=$(qm status "$VM")
-      if [[ "$STATUS" == "status: stopped" && "$STOPPED" == true ]]; then
-        # Check if connection is available
-        if [[ $(qm config "$VM" | grep 'agent:' | sed 's/agent:\s*//') == 1 ]] || [[ -f $LOCAL_FILES/VMs/"$VM" ]]; then
-          # Start the VM
-          qm start "$VM" >/dev/null 2>&1
-          sleep 45
-          CHECK_VM "$VM"
-          # Stop the VM
-          qm stop "$VM"
+    # Check if connection is available
+    if [[ $(qm config "$VM" | grep 'agent:' | sed 's/agent:\s*//') == 1 ]] || [[ -f $LOCAL_FILES/VMs/"$VM" ]]; then
+      # Check VM
+      PRE_OS=$(qm config "$VM" | grep 'ostype:' | sed 's/ostype:\s*//')
+      if [[ "$ONLY" == "" && "$EXCLUDED" =~ $VM ]]; then
+        continue
+      elif [[ "$ONLY" != "" ]] && ! [[ "$ONLY" =~ $VM ]]; then
+        continue
+      elif [[ "$PRE_OS" =~ w ]]; then
+        continue
+      else
+        STATUS=$(qm status "$VM")
+        if [[ -f $LOCAL_FILES/VMs/"$VM" ]]; then
+          IP=$(awk -F'"' '/^IP=/ {print $2}' $LOCAL_FILES/VMs/"$VM")
+          USER=$(awk -F'"' '/^USER=/ {print $2}' $LOCAL_FILES/VMs/"$VM")
+          if [[ -z "$USER" ]]; then USER="root"; fi
+          SSH_VM_PORT=$(awk -F'"' '/^SSH_VM_PORT=/ {print $2}' $LOCAL_FILES/VMs/"$VM")
+          if [[ -z "$SSH_VM_PORT" ]]; then SSH_VM_PORT="22"; fi
+          SSH_START_DELAY_TIME=$(awk -F'"' '/^SSH_START_DELAY_TIME=/ {print $2}' $LOCAL_FILES/VMs/"$VM")
+          if [[ -z "$SSH_START_DELAY_TIME" ]]; then SSH_START_DELAY_TIME="45"; fi
         fi
-      elif [[ "$STATUS" == "status: running" && "$RUNNING" == true ]]; then
-        CHECK_VM "$VM"
+        if [[ "$STATUS" == "status: stopped" && "$STOPPED_VM" == true ]]; then
+          # Check suspend mode
+          if [[ $(qm config "$VM" | grep 'lock:' | sed 's/lock:\s*//') == "suspend" ]]; then 
+            SUSPEND=true
+            echo -e "${OR}skip suspend VM${CL}"
+            continue
+          fi
+          # Start VM
+          qm start "$VM" >/dev/null 2>&1
+          sleep "$SSH_START_DELAY_TIME"
+          sleep "$SSH_START_DELAY_TIME"
+          CHECK_VM "$VM"
+          # Stop/Suspend VM
+          qm stop "$VM"
+          SUSPEND=
+        elif [[ "$STATUS" == "status: paused" && "$PAUSED_VM" == true ]]; then
+          # Start VM
+          qm resume "$VM" >/dev/null 2>&1
+          sleep "$SSH_START_DELAY_TIME"
+          CHECK_VM "$VM"
+          # Suspend VM
+          qm suspend "$VM"
+        elif [[ "$STATUS" == "status: running" && "$RUNNING_VM" == true ]]; then
+          VM_NOT_STOPPED=true
+          CHECK_VM "$VM"
+          VM_NOT_STOPPED=""
+        fi
       fi
     fi
   done
@@ -243,18 +306,24 @@ CHECK_VM () {
   fi
   NAME=$(qm config "$VM" | grep 'name:' | sed 's/name:\s*//')
   if [[ -f $LOCAL_FILES/VMs/"$VM" ]]; then
-    IP=$(awk -F'"' '/^IP=/ {print $2}' $LOCAL_FILES/VMs/"$VM")
     if ! (ssh "$IP" exit) >/dev/null 2>&1; then
       CHECK_VM_QEMU
     else
-      OS_BASE=$(qm config "$VM" | grep ostype)
+      OS_BASE=$(qm config "$VM" | grep ostype || true)
       if [[ "$OS_BASE" =~ l2 ]]; then
-        OS=$(ssh "$IP" hostnamectl | grep System)
-        if [[ "$OS" =~ Ubuntu ]] || [[ "$OS" =~ Debian ]] || [[ "$OS" =~ Devuan ]]; then
-          ssh "$IP" "apt-get update" >/dev/null 2>&1
-          SECURITY_APT_UPDATES=$(ssh "$IP" "apt-get -s upgrade | grep -ci ^inst.*security")
-          NORMAL_APT_UPDATES=$(ssh "$IP" "apt-get -s upgrade | grep -ci ^inst.")
-          if ssh "$IP" stat /var/run/reboot-required.pkgs \> /dev/null 2\>\&1; then REBOOT_REQUIRED=true; fi
+        KERNEL=$(qm guest cmd "$VM" get-osinfo 2>/dev/null | grep kernel-version || true)
+        OS=$(ssh -q -p "$SSH_VM_PORT" "$USER"@"$IP" hostnamectl 2>/dev/null | grep System || true)
+#        if [[ "$KERNEL" =~ FreeBSD ]]; then
+#          ssh -t -q -p "$SSH_VM_PORT" -tt "$USER"@"$IP" pkg update
+#          return
+#        fi
+        if [[ ${OS,,} =~ ubuntu|mint|kali|debian|devuan ]]; then
+          ssh -q -p "$SSH_VM_PORT" "$USER"@"$IP" "apt-get update" >/dev/null 2>&1
+          APT_OUTPUT=$(ssh -q -p "$SSH_VM_PORT" "$USER"@"$IP" "apt-get -s upgrade")
+          SECURITY_APT_UPDATES=$(echo "$APT_OUTPUT" | grep -ci '^inst.*security')
+          if [[ "$SECURITY_APT_UPDATES" -gt 0 ]]; then SECURITY_UPDATES_AVALABLE=true; fi
+          NORMAL_APT_UPDATES=$(echo "$APT_OUTPUT" | grep -ci '^inst.')
+          if ssh -q -p "$SSH_VM_PORT" "$USER"@"$IP" stat /var/run/reboot-required.pkgs \> /dev/null 2\>\&1; then REBOOT_REQUIRED=true; fi
           if [[ "$SECURITY_APT_UPDATES" -gt 0 || "$NORMAL_APT_UPDATES" -gt 0 || "$REBOOT_REQUIRED" == true ]]; then
             echo -e "${GN}VM ${BL}$VM${CL} : ${GN}$NAME${CL}"
           fi
@@ -266,15 +335,18 @@ CHECK_VM () {
           elif [[ "$NORMAL_APT_UPDATES" -gt 0 ]]; then
             echo -e "N: $NORMAL_APT_UPDATES"
           fi
+          if [[ "$REBOOT_REQUIRED" == true ]] && [[ "$REEBOOT_IF_NEEDED" == true ]] && [[ "$VM_NOT_STOPPED" == true ]]; then
+            ssh -q -p "$SSH_VM_PORT" "$USER"@"$IP" "reboot" >/dev/null 2>&1
+          fi
         elif [[ "$OS" =~ Fedora ]]; then
-          ssh "$IP" "dnf -y update" >/dev/null 2>&1
-          UPDATES=$(ssh "$IP" "dnf check-update| grep -Ec ' updates$'")
+          ssh -q -p "$SSH_VM_PORT" "$USER"@"$IP" "dnf -y update" >/dev/null 2>&1
+          UPDATES=$(ssh -q -p "$SSH_VM_PORT" "$USER"@"$IP" "dnf check-update| grep -Ec ' updates$'")
           if [[ "$UPDATES" -gt 0 ]]; then
             echo -e "${GN}VM ${BL}$VM${CL} : ${GN}$NAME${CL}"
             echo -e "$UPDATES"
           fi
         elif [[ "$OS" =~ Arch ]]; then
-          UPDATES=$(ssh "$IP" "pacman -Qu | wc -l")
+          UPDATES=$(ssh -q -p "$SSH_VM_PORT" "$USER"@"$IP" "pacman -Qu | wc -l")
           if [[ "$UPDATES" -gt 0 ]]; then
             echo -e "${GN}VM ${BL}$VM${CL} : ${GN}$NAME${CL}"
             echo -e "$UPDATES"
@@ -282,7 +354,7 @@ CHECK_VM () {
         elif [[ "$OS" =~ Alpine ]]; then
           return
         elif [[ "$OS" =~ CentOS ]]; then
-          UPDATES=$(ssh "$IP" "yum -q check-update | wc -l")
+          UPDATES=$(ssh -q -p "$SSH_VM_PORT" "$USER"@"$IP" "yum -q check-update | wc -l")
           if [[ "$UPDATES" -gt 0 ]]; then
             echo -e "${GN}VM ${BL}$VM${CL} : ${GN}$NAME${CL}"
             echo -e "$UPDATES"
@@ -297,10 +369,16 @@ CHECK_VM () {
 
 CHECK_VM_QEMU () {
   if qm guest exec "$VM" test >/dev/null 2>&1; then
-    OS=$(qm guest cmd "$VM" get-osinfo | grep name)
-    if [[ "$OS" =~ Ubuntu ]] || [[ "$OS" =~ Debian ]] || [[ "$OS" =~ Devuan ]]; then
+    KERNEL=$(qm guest cmd "$VM" get-osinfo | grep kernel-version || true)
+    OS=$(qm guest cmd "$VM" get-osinfo | grep name || true)
+#    if [[ "$KERNEL" =~ FreeBSD ]]; then
+#      qm guest exec "$VM" -- tcsh -c "pkg update"
+#      return
+#    fi
+    if [[ ${OS,,} =~ ubuntu|mint|kali|debian|devuan ]]; then
       qm guest exec "$VM" -- bash -c "apt-get update" >/dev/null 2>&1
       SECURITY_APT_UPDATES=$(qm guest exec "$VM" -- bash -c "apt-get -s upgrade | grep -ci ^inst.*security | tr -d '\n'" | tail -n +4 | head -n -1 | cut -c 18- | rev | cut -c 2- | rev)
+      if [[ "$SECURITY_APT_UPDATES" -gt 0 ]]; then SECURITY_UPDATES_AVALABLE=true; fi
       NORMAL_APT_UPDATES=$(qm guest exec "$VM" -- bash -c "apt-get -s upgrade | grep -ci ^inst. | tr -d '\n'" | tail -n +4 | head -n -1 | cut -c 18- | rev | cut -c 2- | rev)
       if [[ $(qm guest exec "$VM" -- bash -c "[ -f /var/run/reboot-required.pkgs ]" | grep exitcode) =~ 0 ]]; then REBOOT_REQUIRED=true; fi
       if [[ "$SECURITY_APT_UPDATES" -gt 0 || "$NORMAL_APT_UPDATES" -gt 0 || "$REBOOT_REQUIRED" == true ]]; then
@@ -344,8 +422,44 @@ OUTPUT_TO_FILE () {
   if [[ "$RDU" != true && "$RICM" != true ]]; then
     touch $LOCAL_FILES/check-output
     exec > >(tee $LOCAL_FILES/check-output)
+    # create mail output file
+    touch $LOCAL_FILES/mail-output
+    echo -e "Available Updates:"  > $LOCAL_FILES/mail-output
+    echo -e "S = Security / N = Normal\n" >> $LOCAL_FILES/mail-output
+    exec > >(tee -a $LOCAL_FILES/mail-output)
   fi
 }
+
+# Exit
+# shellcheck disable=SC2329
+EXIT () {
+  # clean email output file
+  if [[ "$RDU" != true && "$RICM" != true ]]; then
+    if [[ -f "$LOCAL_FILES/mail-output" ]]; then
+      cat "$LOCAL_FILES/mail-output" | sed -r "s/\x1B\[([0-9]{1,3}(;[0-9]{1,3})*)?[mGK]//g" | tee "$LOCAL_FILES/mail-output" >/dev/null 2>&1
+      chmod 640 "$LOCAL_FILES/mail-output"
+      if [[ $(stat -c%s "$LOCAL_FILES/mail-output") -gt 46 ]]; then
+        # check variable !!!
+        if [[ "$EMAIL_ONLY_SECURITY" == true && "$SECURITY_UPDATES_AVALABLE" == true ]]; then
+          mail -s "Ultimate Updater summary - $HOSTNAME" "$EMAIL_USER" < "$LOCAL_FILES"/mail-output
+        else
+          mail -s "Ultimate Updater summary - $HOSTNAME" "$EMAIL_USER" < "$LOCAL_FILES"/mail-output
+        fi
+      elif [[ "$EMAIL_NO_UPDATES" == true ]]; then
+        echo "No updates found during search" | mail -s "Ultimate Updater" "$EMAIL_USER"
+      fi
+    fi
+  fi
+}
+trap EXIT EXIT
+
+# Run
+
+# Debug
+DEBUG=$(awk -F'"' '/^DEBUG=/ {print $2}' $CONFIG_FILE)
+if [[ "$DEBUG" == true ]]; then
+  set -x
+fi
 
 # Check Cluster Mode
 if [[ -f /etc/corosync/corosync.conf ]]; then
@@ -355,10 +469,12 @@ else
   MODE="Host"
 fi
 
-# Run
-if [[ "$(wget -q --spider http://google.com)" -eq 0 ]]; then
-  READ_WRITE_CONFIG
+# Read config
+READ_WRITE_CONFIG
+if wget -q --spider "$CHECK_URL" >/dev/null 2>&1; then
   ARGUMENTS "$@"
+  # Print any tag selection summary captured during config parse
+  if [[ "$RDU" != true && "$RICM" != true && "$TAG_OUTPUT" != false ]]; then if declare -f print_tag_log >/dev/null 2>&1; then print_tag_log; fi; fi
 else
   echo -e "${OR} You are offline${CL}"
   exit 2
@@ -367,7 +483,6 @@ fi
 # Run without commands (Automatic Mode)
 if [[ "$COMMAND" != true && "$RDU" == true ]]; then
   OUTPUT_TO_FILE
-  CHECK_RUNNUNG_MACHINE
 elif [[ "$COMMAND" != true ]]; then
   OUTPUT_TO_FILE
   if [[ "$MODE" =~ Cluster ]]; then HOST_CHECK_START; else
@@ -376,3 +491,5 @@ elif [[ "$COMMAND" != true ]]; then
     if [[ "$WITH_VM" == true ]]; then VM_CHECK_START; fi
   fi
 fi
+
+exit 0

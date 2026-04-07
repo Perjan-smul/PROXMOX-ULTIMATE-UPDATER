@@ -5,7 +5,8 @@
 ##################
 
 # shellcheck disable=SC2034
-VERSION="1.3.7"
+
+VERSION="1.9"
 
 # Variable / Function
 LOCAL_FILES="/etc/ultimate-updater"
@@ -21,26 +22,75 @@ CL="\e[0m"
 
 # Version Check
 VERSION_CHECK () {
-  curl -s "$SERVER_URL"/update.sh > /root/update.sh
-  SERVER_VERSION=$(awk -F'"' '/^VERSION=/ {print $2}' /root/update.sh)
+  curl -s https://raw.githubusercontent.com/BassT23/Proxmox/master/update.sh > /root/update_master.sh
+  curl -s https://raw.githubusercontent.com/BassT23/Proxmox/beta/update.sh > /root/update_beta.sh
+  curl -s https://raw.githubusercontent.com/BassT23/Proxmox/develop/update.sh > /root/update_develop.sh
+  MASTER_VERSION=$(awk -F'"' '/^VERSION=/ {print $2}' /root/update_master.sh)
+  BETA_VERSION=$(awk -F'"' '/^VERSION=/ {print $2}' /root/update_beta.sh)
+  DEVELOP_VERSION=$(awk -F'"' '/^VERSION=/ {print $2}' /root/update_develop.sh)
   LOCAL_VERSION=$(awk -F'"' '/^VERSION=/ {print $2}' $LOCAL_FILES/update.sh)
-  if [[ "$BRANCH" == beta ]]; then
-    echo -e "${OR}*** The Ultimate Updater is on beta branch ***${CL}"
-  elif [[ "$BRANCH" == develop ]]; then
-    echo -e "${OR}*** The Ultimate Updater is on develop branch ***${CL}"
-  fi
-  if [[ "$SERVER_VERSION" > "$LOCAL_VERSION" ]]; then
-    echo -e "${OR}    *** A newer version is available ***${CL}\n\
-      Installed: $LOCAL_VERSION / Server: $SERVER_VERSION\n\
-      ${OR}You can update with <update -up>${CL}\n"
-    VERSION_NOT_SHOW=true
-  elif  [[ ! -s /root/update.sh ]]; then
-    echo -e "${OR} *** You are offline - can't check version ***${CL}"
-  elif [[ "$BRANCH" == master ]]; then
+  if [[ "$BRANCH" == develop ]]; then
+    if  [[ ! -s /root/update_develop.sh ]]; then
+      echo -e "${OR}*** You are offline - can't check version ***${CL}\n"
+      echo -e "${OR}*** The Ultimate Updater is on develop branch ***${CL}"
+    elif [[ "$LOCAL_VERSION" < "$MASTER_VERSION" ]]; then
+      echo -e "${OR}       *** A newer version is available ***${CL}\n\
+       Installed: $LOCAL_VERSION / Github-Master: $MASTER_VERSION\n\
+        ${OR}You can update with <update -up>${CL}\n"
+      VERSION_NOT_SHOW=true
+    elif [[ "$LOCAL_VERSION" < "$BETA_VERSION" ]]; then
+      echo -e "${OR}       *** A newer version is available ***${CL}\n\
+       Installed: $LOCAL_VERSION / Github-Beta: $BETA_VERSION\n\
+         ${OR}You can update with <update -up>${CL}\n"
+      VERSION_NOT_SHOW=true
+    elif [[ "$LOCAL_VERSION" < "$DEVELOP_VERSION" ]]; then
+      echo -e "${OR}       *** A newer version is available ***${CL}\n\
+     Installed: $LOCAL_VERSION / Github-Develop: $DEVELOP_VERSION\n\
+        ${OR}You can update with <update -up>${CL}\n"
+      VERSION_NOT_SHOW=true
+    else
       echo -e "${GN}       The Ultimate Updater is UpToDate${CL}"
+    fi
+  fi
+  if [[ "$BRANCH" == beta ]]; then
+    if  [[ ! -s /root/update_beta.sh ]]; then
+      echo -e "${OR}*** You are offline - can't check version ***${CL}\n"
+      echo -e "${OR}*** The Ultimate Updater is on beta branch ***${CL}"
+    elif [[ "$LOCAL_VERSION" < "$MASTER_VERSION" ]]; then
+      echo -e "${OR}       *** A newer version is available ***${CL}\n\
+       Installed: $LOCAL_VERSION / Github-Master: $MASTER_VERSION\n\
+        ${OR}You can update with <update -up>${CL}\n"
+      VERSION_NOT_SHOW=true
+    elif [[ "$LOCAL_VERSION" < "$BETA_VERSION" ]]; then
+      echo -e "${OR}       *** A newer version is available ***${CL}\n\
+       Installed: $LOCAL_VERSION / Github-Beta: $BETA_VERSION\n\
+         ${OR}You can update with <update -up>${CL}\n"
+      VERSION_NOT_SHOW=true
+    elif [[ "$LOCAL_VERSION" < "$DEVELOP_VERSION" ]]; then
+      echo -e "${OR}       *** A newer version is available ***${CL}\n\
+     Installed: $LOCAL_VERSION / Github-Develop: $DEVELOP_VERSION\n\
+        ${OR}You can update with <update -up>${CL}\n"
+      VERSION_NOT_SHOW=true
+    else
+      echo -e "${GN}       The Ultimate Updater is UpToDate${CL}"
+    fi
+  fi
+  if [[ "$BRANCH" == master ]]; then
+    if  [[ ! -s /root/update_master.sh ]]; then
+      echo -e "${OR}*** You are offline - can't check version ***${CL}\n"
+    elif [[ "$LOCAL_VERSION" < "$MASTER_VERSION" ]]; then
+      echo -e "${OR}    *** A newer version is available ***${CL}\n\
+        Installed: $LOCAL_VERSION / Server: $MASTER_VERSION\n\
+        ${OR}You can update with <update -up>${CL}\n"
+      VERSION_NOT_SHOW=true
+    else
+        echo -e "${GN}       The Ultimate Updater is UpToDate${CL}"
+    fi
   fi
   if [[ "$VERSION_NOT_SHOW" != true ]]; then echo -e "              Version: $LOCAL_VERSION\n"; fi
-  rm -rf /root/update.sh
+  rm -rf /root/update_master.sh
+  rm -rf /root/update_beta.sh
+  rm -rf /root/update_develop.sh
 }
 
 READ_WRITE_CONFIG () {
@@ -51,6 +101,13 @@ READ_WRITE_CONFIG () {
   STOPPED=$(awk -F'"' '/^CHECK_STOPPED_CONTAINER=/ {print $2}' $CONFIG_FILE)
   EXCLUDED=$(awk -F'"' '/^EXCLUDE_UPDATE_CHECK=/ {print $2}' $CONFIG_FILE)
   ONLY=$(awk -F'"' '/^ONLY_UPDATE_CHECK=/ {print $2}' $CONFIG_FILE)
+  if [[ -f "$LOCAL_FILES/tag-filter.sh" ]]; then
+    # shellcheck disable=SC1091
+    . "$LOCAL_FILES/tag-filter.sh"
+    if declare -f apply_only_exclude_tags >/dev/null 2>&1; then
+      apply_only_exclude_tags ONLY EXCLUDED
+    fi
+  fi
   if [[ $ONLY != "" ]]; then
     echo -e "${OR}Only is set. Not all machines are checked.${CL}\n"
   elif [[ $ONLY == "" && $EXCLUDED != "" ]]; then
@@ -69,7 +126,9 @@ MINUTES=$(( (NOW - MOD) / 60 ))
 }
 
 # Welcome
-if [[ -f /usr/bin/neofetch ]]; then
+if [[ -f /usr/bin/screenfetch ]]; then
+  echo && screenfetch && echo
+elif [[ -f /usr/bin/neofetch ]]; then
   echo
   neofetch
 else

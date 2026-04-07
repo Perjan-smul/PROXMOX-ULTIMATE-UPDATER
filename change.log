@@ -1,6 +1,86 @@
 Changelog:
 ==========
 
+**v4.5.3** (beta/develop)
+- add Reboot VM/Container after update option in config file
+- add option to send email only if security updates are available
+- fix password promt during update check
+- fix uninstall issue
+- add screenfetch also during install #253
+- add hostname in mail notification subject #254
+- hide mail error
+
+**v4.5.2** (24.08.2025)
+- add EMAIL_NO_UPDATES in config file
+- add Backup when Snapshot is not available #204
+- fix fs-trim
+- fix "error code 1" on start
+- fix #188 error during helper-script update
+- fix ssh connection during check
+- code cleaning
+
+**v4.5** (22.08.2025)
+- add LXC debian trixie upgrade (`update -dist-upgrade`)
+- "only" or "exclude" LXC/VM by ID/TAG/range #thx to @AdamSutch
+- add debug mode (can be enabled in config file)
+- add check-updates command `update -check`
+- add email notification after update
+- add better email notification for update-check
+- add more symbolic
+- add LXC template detection
+- check "paused" VMs during update-check and bring them back in pause
+- fix check for VM with ssh connection
+- fix #203 Error on apt clean
+- fix unsupported neofetch under trixie - change to screenfetch
+- fix #201 (abbort after template detection)
+- fix VM ID in error-log-file
+- fix shell check
+- fix typo
+- code cleaning
+
+**v4.4** (10.05.2025)
+- add symbolic
+- add user scripts folder
+- add "error hopping option" in config file
+- add LXC start delay option in config file
+- add "update" command for "Proxmox VE Helper-Scripts" in extra section
+- fix docker-compose v2 skipping
+- fix YUM Update - used now only for centos
+- fix VM shutdown errors
+- FreeBSD is disabled by default - in config file
+- modify "update <ID>" - disable skip output
+- code cleaning
+
+**v4.3** (23.02.2025)
+- add freebsd VM (QEMU and SSH Connection)
+- add non root user update in VMs
+- add autoclean for debian based systems
+- add filesystem trim for ext4 systems
+- add curl for internet check
+- add env settings for arch in config file
+- add kernel kleaning (disabled by default in config file)
+- fix run for only one LXC/VM with `update <ID>`
+- fix ioBroker Upgrade
+- fix arch upgrade
+- fix START/STOP/WAITING for stopped VMs
+- fix compatibility with "old" ssh connection
+- fix IP output by nodes
+- fix fedora autoremove
+- fix missing kernel infos
+- fix template detection
+- fix internet check
+- modify config file - checker settings now on the buttom
+- modify version check - check now all branches
+- code cleaning
+
+**v4.2** (01.12.2024)
+- fix VM Template error
+- fix Unifi-Controller Container
+- fix FreeBSD VM error
+- fix docker compose
+- fix node hopping without welcome screen installed
+- rebuild waiting for VM start (could now be set in config file)
+
 **v4.1** (07.04.2024)
 - disable/enable Snapshots and Backups in config file
 - set, how many snapshots will be keep, in config file
