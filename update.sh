@@ -876,13 +876,15 @@ UPDATE_CONTAINER () {
   # shellcheck disable=SC2015
   if [[ "${OS,,}" =~ ubuntu|debian|devuan ]]; then
     echo -e "${OR:-}--- APT UPDATE ---${CL:-}"
-    # --allow-releaseinfo-change needed for repos that change metadata between versions (e.g. Unifi)
-    pct exec "$CONTAINER" -- bash -c "apt-get update --allow-releaseinfo-change" || ERROR_CODE=$? && ID=$CONTAINER && ERROR_MSG=$(pct exec "$CONTAINER" -- bash -c "apt-get update --allow-releaseinfo-change" 2>&1) || ERROR
-    if [[ $ERROR_CODE != "" ]]; then return; fi
-    # Check APT in Container
+    # Check APT in Container for Unifi before update
     if pct exec "$CONTAINER" -- bash -c "grep -rnw /etc/apt -e unifi >/dev/null 2>&1"; then
       UNIFI="true"
+      # --allow-releaseinfo-change needed because Unifi regularly changes repository metadata between versions
+      pct exec "$CONTAINER" -- bash -c "apt-get update --allow-releaseinfo-change" || ERROR_CODE=$? && ID=$CONTAINER && ERROR_MSG=$(pct exec "$CONTAINER" -- bash -c "apt-get update --allow-releaseinfo-change" 2>&1) || ERROR
+    else
+      pct exec "$CONTAINER" -- bash -c "apt-get update" || ERROR_CODE=$? && ID=$CONTAINER && ERROR_MSG=$(pct exec "$CONTAINER" -- bash -c "apt-get update" 2>&1) || ERROR
     fi
+    if [[ $ERROR_CODE != "" ]]; then return; fi
     # Check END
     if [[ "$HEADLESS" == true ]]; then
       echo -e "\n${OR:-}--- APT UPGRADE HEADLESS ---${CL:-}"
