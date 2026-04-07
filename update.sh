@@ -457,8 +457,12 @@ CONTAINER_BACKUP () {
       # Use BACKUP_MODE from config, default to 'stop' if not set
       MODE=${BACKUP_MODE:-stop}
       echo -e "💾${OR:-} Create a backup for LXC (this will take some time - please wait)${CL:-}"
-      vzdump "$CONTAINER" --mode "$MODE" --notes-template "{{guestname}} - Ultimate-Updater" --storage "$(pvesm status -content backup | grep -m 1 -v ^Name | cut -d ' ' -f1)" --compress zstd
-      echo -e "✅${GN:-} Backup created${CL:-}\n"
+      if vzdump "$CONTAINER" --mode stop --notes-template "{{guestname}} - Ultimate-Updater" --storage "$(pvesm status -content backup | grep -m 1 -v ^Name | cut -d ' ' -f1)" --compress zstd; then
+        echo -e "✅${GN:-} Backup created${CL:-}\n"
+      else
+        echo -e "❌${RD:-} Backup of LXC $CONTAINER failed - skipping update${CL:-}\n"
+        return 1
+      fi
       if [[ $BACKUP_RESET == true ]]; then
         BACKUP=$(awk -F'"' '/^BACKUP=/ {print $2}' "$CONFIG_FILE")
         SNAPSHOT=$(awk -F'"' '/^SNAPSHOT/ {print $2}' "$CONFIG_FILE")
@@ -487,8 +491,12 @@ VM_BACKUP () {
       # Use BACKUP_MODE from config, default to 'stop' if not set
       MODE=${BACKUP_MODE:-stop}
       echo -e "💾${OR:-} Create a backup for the VM (this will take some time - please wait)${CL:-}"
-      vzdump "$VM" --mode "$MODE" --storage "$(pvesm status -content backup | grep -m 1 -v ^Name | cut -d ' ' -f1)" --compress zstd
-      echo -e "✅${GN:-} Backup created${CL:-}"
+      if vzdump "$VM" --mode stop --storage "$(pvesm status -content backup | grep -m 1 -v ^Name | cut -d ' ' -f1)" --compress zstd; then
+        echo -e "✅${GN:-} Backup created${CL:-}"
+      else
+        echo -e "❌${RD:-} Backup of VM $VM failed - skipping update${CL:-}"
+        return 1
+      fi
     fi
   else
     echo -e "⏩${OR:-} Snapshot and/or Backup skipped by the user${CL:-}"
@@ -592,7 +600,7 @@ DIST_UPGRADE () {
       SNAPSHOT=
       BACKUP=true
       echo
-      CONTAINER_BACKUP
+      CONTAINER_BACKUP || return
       echo -e "${GR:-}⏩ Upgrade to Debian 13 (Trixie) now:${CL:-}"
       echo -e "${OR:-}--- Enable stop on error ---\n${CL:-}"
       set -e
@@ -853,7 +861,7 @@ UPDATE_CONTAINER () {
   # Backup
   if [[ "$CHECK_DIST" != true ]]; then
     echo -e "💾${OR:-} Start Snapshot and/or Backup${CL:-}"
-    CONTAINER_BACKUP
+    CONTAINER_BACKUP || return
     echo
   fi
   # Run dist-upgrade
@@ -997,7 +1005,7 @@ UPDATE_VM () {
   echo -e "🔄${GN:-} Updating VM ${BL:-}$VM${CL:-} : ${GN:-}$NAME${CL:-}\n"
   # Backup
   echo -e "💾${OR:-} Start Snapshot and/or Backup${CL:-}"
-  VM_BACKUP
+  VM_BACKUP || return
   echo
   # Read SSH config file - check how update is possible
   if [[ -f $LOCAL_FILES/VMs/"$VM" ]]; then
